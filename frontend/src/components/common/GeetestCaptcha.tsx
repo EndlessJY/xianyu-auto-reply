@@ -164,6 +164,7 @@ export function GeetestCaptcha({
           challenge,
           offline: success === 0,
           new_captcha,
+          https: true,
           product: 'bind',
           width: '100%',
           lang: 'zh-cn'
