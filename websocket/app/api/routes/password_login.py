@@ -65,6 +65,8 @@ password_login_sessions: Dict[str, Dict[str, Any]] = {}
 # 会话锁
 password_login_locks: Dict[str, asyncio.Lock] = {}
 
+ACTIVE_LOGIN_STATUSES = {"processing", "verification_required"}
+
 
 def get_session_lock(session_id: str) -> asyncio.Lock:
     """获取会话锁"""
@@ -85,6 +87,28 @@ def cleanup_expired_sessions():
             del password_login_sessions[sid]
         if sid in password_login_locks:
             del password_login_locks[sid]
+
+
+def _normalize_verification_url(value: Any) -> Optional[str]:
+    """Return a clean verification URL when the captcha layer passes tuple data."""
+    if isinstance(value, (tuple, list)):
+        value = value[0] if value else None
+    if isinstance(value, str):
+        value = value.strip()
+        return value or None
+    return None
+
+
+def find_active_password_login_session(account_id: str) -> Optional[str]:
+    """Find an active password-login session for duplicate submit handling."""
+    cleanup_expired_sessions()
+    for session_id, session in password_login_sessions.items():
+        if (
+            session.get("account_id") == account_id
+            and session.get("status") in ACTIVE_LOGIN_STATUSES
+        ):
+            return session_id
+    return None
 
 
 # ==================== 登录线程 ====================
@@ -140,19 +164,20 @@ def _run_password_login_sync(
             """人脸认证通知回调"""
             try:
                 actual_screenshot_path = screenshot_path_new if screenshot_path_new else screenshot_path
+                actual_verification_url = _normalize_verification_url(verification_url)
                 
                 if actual_screenshot_path:
                     password_login_sessions[session_id]['status'] = 'verification_required'
                     password_login_sessions[session_id]['screenshot_path'] = actual_screenshot_path
-                    password_login_sessions[session_id]['verification_url'] = None
+                    password_login_sessions[session_id]['verification_url'] = actual_verification_url
                     password_login_sessions[session_id]['qr_code_url'] = None
                     logger.info(f"【{account_id}】人脸认证截图已保存: {actual_screenshot_path}")
-                elif verification_url:
+                elif actual_verification_url:
                     password_login_sessions[session_id]['status'] = 'verification_required'
-                    password_login_sessions[session_id]['verification_url'] = verification_url
+                    password_login_sessions[session_id]['verification_url'] = actual_verification_url
                     password_login_sessions[session_id]['screenshot_path'] = None
                     password_login_sessions[session_id]['qr_code_url'] = None
-                    logger.info(f"【{account_id}】人脸认证验证链接已保存: {verification_url}")
+                    logger.info(f"【{account_id}】人脸认证验证链接已保存: {actual_verification_url}")
                 
                 # 发送通知（在已有事件循环中调度异步任务）
                 try:
@@ -166,7 +191,7 @@ def _run_password_login_sync(
                                 error_message=message,
                                 notification_type="password_login_verification",
                                 attachment_path=actual_screenshot_path,
-                                verification_url=verification_url
+                                verification_url=actual_verification_url
                             )
                             logger.info(f"【{account_id}】✅ 人脸验证通知已发送")
                         except Exception as notify_error:
@@ -480,12 +505,23 @@ async def password_login(request: PasswordLoginRequest):
         # 检查账号是否正在处理中，防止重复触发
         from app.services.captcha.password_login_state import password_login_state
         if not password_login_state.start_processing(request.account_id):
-            # 账号正在处理中，直接返回成功（丢弃请求，不报错）
-            logger.info(f"【{request.account_id}】账号正在处理密码登录，丢弃本次请求")
+            # 账号正在处理中，返回已有会话ID，让前端继续轮询同一条登录任务。
+            existing_session_id = find_active_password_login_session(request.account_id)
+            if existing_session_id:
+                logger.info(f"【{request.account_id}】账号正在处理密码登录，复用会话: {existing_session_id}")
+                return PasswordLoginResponse(
+                    success=True,
+                    session_id=existing_session_id,
+                    status="processing",
+                    message="账号正在处理中，请继续等待..."
+                )
+
+            logger.warning(f"【{request.account_id}】密码登录状态存在但未找到活动会话，清理状态后拒绝本次重复请求")
+            password_login_state.finish_processing(request.account_id)
             return PasswordLoginResponse(
-                success=True,
-                status="processing",
-                message="账号正在处理中，请稍候..."
+                success=False,
+                status="failed",
+                message="登录状态已重置，请重新提交"
             )
         
         logger.info(f"【{request.account_id}】开始账号密码登录")

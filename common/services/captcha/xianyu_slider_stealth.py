@@ -800,6 +800,8 @@ class XianyuSliderStealth(PlaywrightSliderService):
                                 
                                 # 尝试自动点击"其他验证方式"，然后找到"通过拍摄脸部"的验证按钮
                                 face_verify_url = self._get_face_verification_url(frame)
+                                if isinstance(face_verify_url, tuple):
+                                    face_verify_url, _saved_screenshot_path = face_verify_url
                                 if face_verify_url:
                                     logger.info(f"【{self.pure_user_id}】✅ 获取到人脸验证链接: {face_verify_url}")
                                     

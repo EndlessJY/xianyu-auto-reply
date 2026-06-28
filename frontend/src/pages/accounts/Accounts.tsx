@@ -138,6 +138,7 @@ export function Accounts() {
   const [pwdStatus, setPwdStatus] = useState<'idle' | 'processing' | 'verification_required' | 'success' | 'failed'>('idle')
   const [pwdVerificationUrl, setPwdVerificationUrl] = useState('')
   const [pwdScreenshotPath, setPwdScreenshotPath] = useState('')
+  const [pwdErrorMessage, setPwdErrorMessage] = useState('')
   const pwdCheckIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   // 手动输入状态
@@ -414,6 +415,7 @@ export function Accounts() {
     setPwdStatus('idle')
     setPwdVerificationUrl('')
     setPwdScreenshotPath('')
+    setPwdErrorMessage('')
     setManualAccountId('')
     setManualCookie('')
     setManualLoading(false)
@@ -573,6 +575,7 @@ export function Accounts() {
             break
           case 'verification_required':
             setPwdStatus('verification_required')
+            setPwdErrorMessage('')
             if (result.verification_url) setPwdVerificationUrl(result.verification_url)
             if (result.screenshot_path) setPwdScreenshotPath(result.screenshot_path)
             break
@@ -592,9 +595,14 @@ export function Accounts() {
             break
           case 'failed':
           case 'not_found':
+          case 'error':
+            {
+              const message = result.error || result.message || '登录失败'
+              setPwdErrorMessage(message)
+              addToast({ type: 'error', message })
+            }
             setPwdStatus('failed')
             clearPwdCheck()
-            addToast({ type: 'error', message: result.error || result.message || '登录失败' })
             break
         }
       } catch {
@@ -612,6 +620,9 @@ export function Accounts() {
 
     setPwdLoading(true)
     setPwdStatus('processing')
+    setPwdErrorMessage('')
+    setPwdVerificationUrl('')
+    setPwdScreenshotPath('')
     try {
       const result = await passwordLogin({
         account_id: pwdAccount.trim(),
@@ -621,16 +632,25 @@ export function Accounts() {
       })
       if (result.success && result.session_id) {
         setPwdSessionId(result.session_id)
-        addToast({ type: 'info', message: '登录任务已启动，请等待...' })
+        addToast({ type: 'info', message: result.message || '登录任务已启动，请等待...' })
         // 开始轮询状态
         startPwdCheck(result.session_id)
+      } else if (result.status === 'processing') {
+        const message = result.message || '账号正在处理中，请稍候，不要重复提交'
+        setPwdStatus('idle')
+        setPwdErrorMessage(message)
+        addToast({ type: 'warning', message })
       } else {
+        const message = result.message || '登录失败'
         setPwdStatus('failed')
-        addToast({ type: 'error', message: result.message || '登录失败' })
+        setPwdErrorMessage(message)
+        addToast({ type: 'error', message })
       }
-    } catch {
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '登录请求失败'
       setPwdStatus('failed')
-      addToast({ type: 'error', message: '登录请求失败' })
+      setPwdErrorMessage(message)
+      addToast({ type: 'error', message })
     } finally {
       setPwdLoading(false)
     }
@@ -2636,7 +2656,7 @@ export function Accounts() {
                     点击打开验证链接
                   </a>
                 )}
-                <p className="mt-2 text-xs text-slate-400">请在手机上完成验证后等待</p>
+                <p className="mt-2 text-xs text-slate-400">请用手机版闲鱼扫码，并在5分钟内完成验证</p>
               </div>
             )}
             {pwdStatus === 'success' && (
@@ -2653,7 +2673,18 @@ export function Accounts() {
                   <X className="w-7 h-7 text-red-600 dark:text-red-400" />
                 </div>
                 <p className="mt-3 font-medium text-red-600 dark:text-red-400">登录失败</p>
-                <button onClick={() => setPwdStatus('idle')} className="mt-3 btn-ios-secondary btn-sm">
+                {pwdErrorMessage && (
+                  <p className="mt-2 max-w-full text-center text-xs text-slate-500 dark:text-slate-400 break-words">
+                    {pwdErrorMessage}
+                  </p>
+                )}
+                <button
+                  onClick={() => {
+                    setPwdStatus('idle')
+                    setPwdErrorMessage('')
+                  }}
+                  className="mt-3 btn-ios-secondary btn-sm"
+                >
                   重试
                 </button>
               </div>

@@ -391,7 +391,7 @@ export const checkQRLoginStatus = async (sessionId: string): Promise<{
 // 检查密码登录状态
 export const checkPasswordLoginStatus = async (sessionId: string): Promise<{
   success: boolean
-  status: 'pending' | 'processing' | 'success' | 'failed' | 'verification_required' | 'not_found'
+  status: 'pending' | 'processing' | 'success' | 'failed' | 'verification_required' | 'not_found' | 'error'
   message?: string
   account_id?: string
   is_new_account?: boolean
@@ -412,7 +412,7 @@ export const checkPasswordLoginStatus = async (sessionId: string): Promise<{
   }>(`${PASSWORD_LOGIN_PREFIX}/check/${sessionId}`)
   return {
     success: result.status === 'success',
-    status: result.status as 'pending' | 'processing' | 'success' | 'failed' | 'verification_required' | 'not_found',
+    status: result.status as 'pending' | 'processing' | 'success' | 'failed' | 'verification_required' | 'not_found' | 'error',
     message: result.message,
     account_id: result.account_id,
     is_new_account: result.is_new_account,
