@@ -19,15 +19,6 @@ on:
         required: true
         default: linux/arm64
         type: string
-      runner:
-        description: Build runner. Auto prefers the local Mac when it is online and falls back to GitHub-hosted.
-        required: true
-        default: auto
-        type: choice
-        options:
-          - auto
-          - github-hosted
-          - self-hosted-mac-arm64
       services:
         description: "auto, all, or comma-separated services: backend-web,websocket,scheduler,frontend"
         required: true
@@ -35,7 +26,6 @@ on:
         type: string
 
 permissions:
-  actions: read
   contents: read
   packages: write
 
@@ -58,8 +48,6 @@ jobs:
       matrix: ${{ steps.plan.outputs.matrix }}
       platforms: ${{ steps.plan.outputs.platforms }}
       python_base_tag: ${{ steps.plan.outputs.python_base_tag }}
-      local_runner_status: ${{ steps.plan.outputs.local_runner_status }}
-      runner_kind: ${{ steps.plan.outputs.runner_kind }}
       runner_labels: ${{ steps.plan.outputs.runner_labels }}
       services_csv: ${{ steps.plan.outputs.services_csv }}
       use_qemu: ${{ steps.plan.outputs.use_qemu }}
@@ -73,24 +61,17 @@ jobs:
       - name: Build plan
         id: plan
         env:
-          EVENT_NAME: ${{ github.event_name }}
           BEFORE_SHA: ${{ github.event.before }}
           SERVICES_INPUT: ${{ inputs.services || 'auto' }}
-          RUNNER_INPUT: ${{ inputs.runner || 'auto' }}
           PLATFORMS_INPUT: ${{ inputs.platforms || 'linux/arm64' }}
-          RUNNER_API_TOKEN: ${{ secrets.LOCAL_RUNNER_ADMIN_TOKEN || github.token }}
         run: |
           python - <<'PY'
           import json
           import os
           import subprocess
-          import urllib.error
-          import urllib.request
 
           all_services = ["backend-web", "websocket", "scheduler", "frontend"]
           python_services = ["backend-web", "websocket", "scheduler"]
-          local_runner_name = "endlessjy-mac-arm64-xianyu-auto-reply"
-          local_runner_labels = {"self-hosted", "macOS", "ARM64", "xianyu-auto-reply", "mac-arm64-build"}
           service_meta = {
               "backend-web": {
                   "dockerfile": "backend-web/Dockerfile",
@@ -110,9 +91,7 @@ jobs:
               },
           }
 
-          event_name = os.environ["EVENT_NAME"]
           services_input = (os.environ.get("SERVICES_INPUT") or "auto").strip()
-          runner_input = (os.environ.get("RUNNER_INPUT") or "github-hosted").strip()
           platforms = (os.environ.get("PLATFORMS_INPUT") or "linux/arm64").strip()
           sha = os.environ["GITHUB_SHA"]
 
@@ -131,50 +110,6 @@ jobs:
               except Exception:
                   return None
               return [line for line in output.splitlines() if line]
-
-          def local_runner_supports_platforms():
-              requested_platforms = [item.strip() for item in platforms.split(",") if item.strip()]
-              return requested_platforms and all(platform == "linux/arm64" for platform in requested_platforms)
-
-          def local_runner_available():
-              if not local_runner_supports_platforms():
-                  return False, f"local Mac supports linux/arm64 only; requested {platforms}"
-
-              token = (os.environ.get("RUNNER_API_TOKEN") or "").strip()
-              if not token:
-                  return False, "runner API token is missing"
-
-              api_url = os.environ.get("GITHUB_API_URL", "https://api.github.com").rstrip("/")
-              repository = os.environ["GITHUB_REPOSITORY"]
-              request = urllib.request.Request(
-                  f"{api_url}/repos/{repository}/actions/runners?per_page=100",
-                  headers={
-                      "Accept": "application/vnd.github+json",
-                      "Authorization": f"Bearer {token}",
-                      "User-Agent": "xianyu-auto-reply-runner-detect",
-                      "X-GitHub-Api-Version": "2022-11-28",
-                  },
-              )
-
-              try:
-                  with urllib.request.urlopen(request, timeout=15) as response:
-                      payload = json.load(response)
-              except urllib.error.HTTPError as exc:
-                  return False, f"runner API returned HTTP {exc.code}"
-              except Exception as exc:
-                  return False, f"runner API check failed: {exc}"
-
-              for runner in payload.get("runners", []):
-                  labels = {label.get("name") for label in runner.get("labels", [])}
-                  if runner.get("name") == local_runner_name or local_runner_labels.issubset(labels):
-                      name = runner.get("name", local_runner_name)
-                      status = runner.get("status", "unknown")
-                      busy = runner.get("busy", True)
-                      if status == "online" and busy is False:
-                          return True, f"{name} is online and idle"
-                      return False, f"{name} status={status} busy={busy}"
-
-              return False, f"{local_runner_name} was not found"
 
           requested = services_input.lower()
           base_changed = False
@@ -236,29 +171,16 @@ jobs:
               ]
           }
 
-          if runner_input not in {"auto", "github-hosted", "self-hosted-mac-arm64"}:
-              raise SystemExit(f"Unknown runner input: {runner_input}")
-
-          use_local_mac = False
-          local_runner_status = "github-hosted requested"
-          if runner_input in {"auto", "self-hosted-mac-arm64"}:
-              use_local_mac, local_runner_status = local_runner_available()
-              if not use_local_mac:
-                  local_runner_status = f"{local_runner_status}; falling back to github-hosted"
-
-          runner_kind = "self-hosted-mac-arm64" if use_local_mac else "github-hosted"
-          runner_labels = sorted(local_runner_labels) if use_local_mac else "ubuntu-latest"
-          use_qemu = not use_local_mac
+          runner_labels = "ubuntu-latest"
+          use_qemu = True
           python_base_tag = sha if base_changed else "latest"
 
           outputs = {
               "base_changed": str(base_changed).lower(),
               "has_changes": str(has_changes).lower(),
-              "local_runner_status": local_runner_status,
               "matrix": json.dumps(matrix, separators=(",", ":")),
               "platforms": platforms,
               "python_base_tag": python_base_tag,
-              "runner_kind": runner_kind,
               "runner_labels": json.dumps(runner_labels),
               "services_csv": ",".join(services),
               "use_qemu": str(use_qemu).lower(),
@@ -281,11 +203,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Prepare Docker config
-        run: |
-          mkdir -p "$RUNNER_TEMP/.docker"
-          echo "DOCKER_CONFIG=$RUNNER_TEMP/.docker" >> "$GITHUB_ENV"
 
       - name: Set up QEMU
         if: needs.detect.outputs.use_qemu == 'true'
@@ -334,11 +251,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Prepare Docker config
-        run: |
-          mkdir -p "$RUNNER_TEMP/.docker"
-          echo "DOCKER_CONFIG=$RUNNER_TEMP/.docker" >> "$GITHUB_ENV"
 
       - name: Set up QEMU
         if: needs.detect.outputs.use_qemu == 'true'
