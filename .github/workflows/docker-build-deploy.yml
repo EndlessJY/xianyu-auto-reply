@@ -18,6 +18,20 @@ on:
         description: Target Docker platforms
         required: true
         default: linux/arm64
+        type: string
+      runner:
+        description: Build runner. Push events always use github-hosted so an offline Mac cannot block deploys.
+        required: true
+        default: github-hosted
+        type: choice
+        options:
+          - github-hosted
+          - self-hosted-mac-arm64
+      services:
+        description: "auto, all, or comma-separated services: backend-web,websocket,scheduler,frontend"
+        required: true
+        default: auto
+        type: string
 
 permissions:
   contents: read
@@ -30,33 +44,181 @@ concurrency:
 env:
   REGISTRY: ghcr.io
   IMAGE_OWNER: endlessjy
+  PYTHON_BASE_IMAGE: xianyu-auto-reply-python-base
 
 jobs:
-  build:
-    name: Build ${{ matrix.service }}
+  detect:
+    name: Detect changed services
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - service: backend-web
-            dockerfile: backend-web/Dockerfile
-            image: xianyu-auto-reply-backend-web
-          - service: websocket
-            dockerfile: websocket/Dockerfile
-            image: xianyu-auto-reply-websocket
-          - service: scheduler
-            dockerfile: scheduler/Dockerfile
-            image: xianyu-auto-reply-scheduler
-          - service: frontend
-            dockerfile: docker/frontend/Dockerfile
-            image: xianyu-auto-reply-frontend
+    outputs:
+      base_changed: ${{ steps.plan.outputs.base_changed }}
+      has_changes: ${{ steps.plan.outputs.has_changes }}
+      matrix: ${{ steps.plan.outputs.matrix }}
+      platforms: ${{ steps.plan.outputs.platforms }}
+      python_base_tag: ${{ steps.plan.outputs.python_base_tag }}
+      runner_labels: ${{ steps.plan.outputs.runner_labels }}
+      services_csv: ${{ steps.plan.outputs.services_csv }}
+      use_qemu: ${{ steps.plan.outputs.use_qemu }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Build plan
+        id: plan
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BEFORE_SHA: ${{ github.event.before }}
+          SERVICES_INPUT: ${{ inputs.services || 'auto' }}
+          RUNNER_INPUT: ${{ inputs.runner || 'github-hosted' }}
+          PLATFORMS_INPUT: ${{ inputs.platforms || 'linux/arm64' }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import subprocess
+
+          all_services = ["backend-web", "websocket", "scheduler", "frontend"]
+          python_services = ["backend-web", "websocket", "scheduler"]
+          service_meta = {
+              "backend-web": {
+                  "dockerfile": "backend-web/Dockerfile",
+                  "image": "xianyu-auto-reply-backend-web",
+              },
+              "websocket": {
+                  "dockerfile": "websocket/Dockerfile",
+                  "image": "xianyu-auto-reply-websocket",
+              },
+              "scheduler": {
+                  "dockerfile": "scheduler/Dockerfile",
+                  "image": "xianyu-auto-reply-scheduler",
+              },
+              "frontend": {
+                  "dockerfile": "docker/frontend/Dockerfile",
+                  "image": "xianyu-auto-reply-frontend",
+              },
+          }
+
+          event_name = os.environ["EVENT_NAME"]
+          services_input = (os.environ.get("SERVICES_INPUT") or "auto").strip()
+          runner_input = (os.environ.get("RUNNER_INPUT") or "github-hosted").strip()
+          platforms = (os.environ.get("PLATFORMS_INPUT") or "linux/arm64").strip()
+          sha = os.environ["GITHUB_SHA"]
+
+          def run_git(args):
+              return subprocess.check_output(["git", *args], text=True).strip()
+
+          def changed_files():
+              before = (os.environ.get("BEFORE_SHA") or "").strip()
+              if not before or set(before) == {"0"}:
+                  try:
+                      before = run_git(["rev-parse", "HEAD^"])
+                  except Exception:
+                      return None
+              try:
+                  output = run_git(["diff", "--name-only", before, sha])
+              except Exception:
+                  return None
+              return [line for line in output.splitlines() if line]
+
+          requested = services_input.lower()
+          base_changed = False
+          selected = set()
+
+          if requested and requested not in {"auto", "all"}:
+              for item in services_input.split(","):
+                  service = item.strip()
+                  if service:
+                      if service not in all_services:
+                          raise SystemExit(f"Unknown service in services input: {service}")
+                      selected.add(service)
+          elif requested == "all":
+              selected.update(all_services)
+              base_changed = True
+          else:
+              files = changed_files()
+              if files is None:
+                  selected.update(all_services)
+                  base_changed = True
+              else:
+                  for path in files:
+                      if path in {
+                          "docker/base/python-playwright/Dockerfile",
+                          "backend-web/pyproject.toml",
+                          "websocket/pyproject.toml",
+                          "scheduler/pyproject.toml",
+                      }:
+                          base_changed = True
+                          selected.update(python_services)
+                      elif path.startswith("docker/base/"):
+                          base_changed = True
+                          selected.update(python_services)
+                      elif path.startswith("common/") or path.startswith("launcher/"):
+                          selected.update(python_services)
+                      elif path.startswith("backend-web/"):
+                          selected.add("backend-web")
+                      elif path.startswith("websocket/"):
+                          selected.add("websocket")
+                      elif path.startswith("scheduler/"):
+                          selected.add("scheduler")
+                      elif path.startswith("frontend/") or path.startswith("docker/frontend/"):
+                          selected.add("frontend")
+
+          services = [service for service in all_services if service in selected]
+          if base_changed and not any(service in services for service in python_services):
+              services = python_services + [service for service in services if service not in python_services]
+
+          has_changes = bool(services)
+          matrix_services = services or ["frontend"]
+          matrix = {
+              "include": [
+                  {
+                      "service": service,
+                      "dockerfile": service_meta[service]["dockerfile"],
+                      "image": service_meta[service]["image"],
+                  }
+                  for service in matrix_services
+              ]
+          }
+
+          use_local_mac = event_name == "workflow_dispatch" and runner_input == "self-hosted-mac-arm64"
+          runner_labels = ["self-hosted", "macOS", "ARM64"] if use_local_mac else "ubuntu-latest"
+          use_qemu = not use_local_mac
+          python_base_tag = sha if base_changed else "latest"
+
+          outputs = {
+              "base_changed": str(base_changed).lower(),
+              "has_changes": str(has_changes).lower(),
+              "matrix": json.dumps(matrix, separators=(",", ":")),
+              "platforms": platforms,
+              "python_base_tag": python_base_tag,
+              "runner_labels": json.dumps(runner_labels),
+              "services_csv": ",".join(services),
+              "use_qemu": str(use_qemu).lower(),
+          }
+
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as handle:
+              for key, value in outputs.items():
+                  handle.write(f"{key}={value}\n")
+
+          print("Build plan:")
+          print(json.dumps(outputs, ensure_ascii=False, indent=2))
+          PY
+
+  build-python-base:
+    name: Build Python base
+    runs-on: ${{ fromJSON(needs.detect.outputs.runner_labels) }}
+    needs: detect
+    if: needs.detect.outputs.base_changed == 'true'
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Set up QEMU
+        if: needs.detect.outputs.use_qemu == 'true'
         uses: docker/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
@@ -69,22 +231,63 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Resolve platforms
-        id: platforms
-        run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "value=${{ inputs.platforms }}" >> "$GITHUB_OUTPUT"
-          else
-            echo "value=linux/arm64" >> "$GITHUB_OUTPUT"
-          fi
+      - name: Build and push Python base
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/base/python-playwright/Dockerfile
+          platforms: ${{ needs.detect.outputs.platforms }}
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/${{ env.PYTHON_BASE_IMAGE }}:${{ github.sha }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/${{ env.PYTHON_BASE_IMAGE }}:latest
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          cache-from: type=gha,scope=python-base
+          cache-to: type=gha,mode=max,scope=python-base
+
+  build:
+    name: Build ${{ matrix.service }}
+    runs-on: ${{ fromJSON(needs.detect.outputs.runner_labels) }}
+    needs:
+      - detect
+      - build-python-base
+    if: |
+      always() &&
+      needs.detect.outputs.has_changes == 'true' &&
+      (needs.build-python-base.result == 'success' || needs.build-python-base.result == 'skipped')
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.detect.outputs.matrix) }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        if: needs.detect.outputs.use_qemu == 'true'
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
           context: .
           file: ${{ matrix.dockerfile }}
-          platforms: ${{ steps.platforms.outputs.value }}
+          platforms: ${{ needs.detect.outputs.platforms }}
           push: true
+          build-args: |
+            PYTHON_BASE_IMAGE=${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/${{ env.PYTHON_BASE_IMAGE }}:${{ needs.detect.outputs.python_base_tag }}
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/${{ matrix.image }}:${{ github.sha }}
             ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/${{ matrix.image }}:latest
@@ -97,8 +300,14 @@ jobs:
   deploy:
     name: Deploy to server
     runs-on: ubuntu-latest
-    needs: build
-    if: github.event_name == 'push' || inputs.deploy == 'true'
+    needs:
+      - detect
+      - build
+    if: |
+      always() &&
+      needs.detect.outputs.has_changes == 'true' &&
+      needs.build.result == 'success' &&
+      (github.event_name == 'push' || inputs.deploy == 'true')
     environment: production
 
     steps:
@@ -130,7 +339,7 @@ jobs:
             scripts/remote-deploy-ghcr.sh \
             "${{ secrets.XIANYU_DEPLOY_USER }}@${{ secrets.XIANYU_DEPLOY_HOST }}:${{ secrets.XIANYU_DEPLOY_PATH }}/remote-deploy-ghcr.sh"
 
-      - name: Pull and restart services
+      - name: Pull and restart changed services
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -140,7 +349,7 @@ jobs:
 
           ssh -i ~/.ssh/xianyu_deploy_key -p "${{ secrets.XIANYU_DEPLOY_PORT }}" \
             "${{ secrets.XIANYU_DEPLOY_USER }}@${{ secrets.XIANYU_DEPLOY_HOST }}" \
-            "chmod +x '${{ secrets.XIANYU_DEPLOY_PATH }}/remote-deploy-ghcr.sh' && '${{ secrets.XIANYU_DEPLOY_PATH }}/remote-deploy-ghcr.sh' '${{ secrets.XIANYU_DEPLOY_PATH }}' '${{ github.sha }}'"
+            "chmod +x '${{ secrets.XIANYU_DEPLOY_PATH }}/remote-deploy-ghcr.sh' && '${{ secrets.XIANYU_DEPLOY_PATH }}/remote-deploy-ghcr.sh' '${{ secrets.XIANYU_DEPLOY_PATH }}' '${{ github.sha }}' '${{ needs.detect.outputs.services_csv }}'"
 
           ssh -i ~/.ssh/xianyu_deploy_key -p "${{ secrets.XIANYU_DEPLOY_PORT }}" \
             "${{ secrets.XIANYU_DEPLOY_USER }}@${{ secrets.XIANYU_DEPLOY_HOST }}" \

@@ -48,7 +48,7 @@ services:
       start_period: 10s
 
   backend-web:
-    image: ${BACKEND_WEB_IMAGE}:${IMAGE_TAG}
+    image: ${BACKEND_WEB_IMAGE}:${BACKEND_WEB_IMAGE_TAG:-${IMAGE_TAG}}
     restart: unless-stopped
     environment:
       - ENVIRONMENT=production
@@ -104,7 +104,7 @@ services:
       start_period: 60s
 
   websocket:
-    image: ${WEBSOCKET_IMAGE}:${IMAGE_TAG}
+    image: ${WEBSOCKET_IMAGE}:${WEBSOCKET_IMAGE_TAG:-${IMAGE_TAG}}
     restart: unless-stopped
     environment:
       - ENVIRONMENT=production
@@ -153,7 +153,7 @@ services:
       start_period: 60s
 
   scheduler:
-    image: ${SCHEDULER_IMAGE}:${IMAGE_TAG}
+    image: ${SCHEDULER_IMAGE}:${SCHEDULER_IMAGE_TAG:-${IMAGE_TAG}}
     restart: unless-stopped
     environment:
       - ENVIRONMENT=production
@@ -202,7 +202,7 @@ services:
       start_period: 60s
 
   frontend:
-    image: ${FRONTEND_IMAGE}:${IMAGE_TAG}
+    image: ${FRONTEND_IMAGE}:${FRONTEND_IMAGE_TAG:-${IMAGE_TAG}}
     restart: unless-stopped
     environment:
       - TZ=Asia/Shanghai

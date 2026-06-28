@@ -2,6 +2,14 @@
 *.pyd
 *.pyc
 __pycache__
+node_modules
+**/node_modules
+frontend/dist
+**/.venv
+**/venv
+**/*.egg-info
+.pytest_cache
+.mypy_cache
 .git
 .gitignore
 .gitattributes
