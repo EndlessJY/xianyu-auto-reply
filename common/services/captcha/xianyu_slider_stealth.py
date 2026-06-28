@@ -537,24 +537,16 @@ class XianyuSliderStealth(PlaywrightSliderService):
         except Exception:
             current_url = ""
 
-        cookie_names = []
-        try:
-            cookie_names = sorted({
-                cookie.get("name", "")
-                for cookie in (self.context.cookies() if self.context else [])
-                if cookie.get("name")
-            })
-        except Exception:
-            cookie_names = []
+        cookie_names = sorted(self._get_cookie_snapshot().keys())
 
-        has_release_cookie = any(name in cookie_names for name in ("x5sec", "unb", "cookie2"))
+        has_release_cookie = any(name in cookie_names for name in ("x5sec", "unb", "munb", "cookie2"))
         has_slider_marker = any(name in cookie_names for name in ("x5sectag", "x5secdata"))
 
         if has_release_cookie:
             return "闲鱼滑块验证已放行，但登录态仍未加载完成，请稍后重试"
         if has_slider_marker:
             return (
-                "闲鱼滑块风控未真正放行：页面已跳转但未获得 x5sec/unb 登录凭据。"
+                "闲鱼滑块风控未真正放行：页面已跳转但未获得 x5sec/unb/munb 登录凭据。"
                 "这不是人脸验证，也不一定是密码错误；请稍后重试，或改用扫码登录。"
             )
         if current_url:
@@ -565,6 +557,28 @@ class XianyuSliderStealth(PlaywrightSliderService):
         message = self._build_slider_incomplete_message()
         logger.error(f"【{self.pure_user_id}】❌ {message}")
         raise SliderVerificationIncompleteException(message)
+
+    def _get_cookie_snapshot(self) -> Dict[str, str]:
+        """读取当前 Playwright 上下文里的 Cookie，返回 name -> value 快照。"""
+        try:
+            cookies_dict = {}
+            if not self.context:
+                return cookies_dict
+
+            for cookie in self.context.cookies():
+                name = str(cookie.get('name') or '').strip()
+                if name:
+                    cookies_dict[name] = str(cookie.get('value') or '')
+            return cookies_dict
+        except Exception as e:
+            logger.debug(f"【{self.pure_user_id}】读取Cookie快照失败: {e}")
+            return {}
+
+    def _has_login_cookie(self, cookies: Optional[Dict[str, str]]) -> bool:
+        """判断 Cookie 中是否已经包含闲鱼登录账号标识。"""
+        if not cookies:
+            return False
+        return bool(str(cookies.get("unb") or cookies.get("munb") or "").strip())
     
     def _detect_and_handle_slider(self) -> bool:
         """检测并处理滑块验证
@@ -610,6 +624,20 @@ class XianyuSliderStealth(PlaywrightSliderService):
             是否登录成功
         """
         try:
+            cookies = self._get_cookie_snapshot()
+            if self._has_login_cookie(cookies):
+                current_url = ""
+                try:
+                    current_url = self.page.url or ""
+                except Exception:
+                    current_url = ""
+
+                url_note = f"，当前URL: {current_url[:120]}" if current_url else ""
+                logger.success(
+                    f"【{self.pure_user_id}】✅ 登录成功！检测到登录Cookie（含unb/munb）{url_note}"
+                )
+                return True
+
             # 使用旧框架的选择器
             selector = '.rc-virtual-list-holder-inner'
             logger.info(f"【{self.pure_user_id}】========== 检查登录状态（通过页面元素） ==========")
@@ -1358,10 +1386,7 @@ class XianyuSliderStealth(PlaywrightSliderService):
             Cookie字典
         """
         try:
-            cookies_dict = {}
-            cookies_list = self.context.cookies()
-            for cookie in cookies_list:
-                cookies_dict[cookie.get('name', '')] = cookie.get('value', '')
+            cookies_dict = self._get_cookie_snapshot()
             
             logger.info(f"【{self.pure_user_id}】成功获取Cookie，包含 {len(cookies_dict)} 个字段")
             
