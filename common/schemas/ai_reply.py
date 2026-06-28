@@ -11,8 +11,8 @@ class AIReplySettings(BaseModel):
     model_name: str = "qwen-plus"
     api_key: str = ""
     base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-    max_discount_percent: int = 10
-    max_discount_amount: int = 100
+    max_discount_percent: float = 10
+    max_discount_amount: float = 100
     max_bargain_rounds: int = 3
     custom_prompts: str = ""
     ai_time_range_start: str = ""
@@ -27,8 +27,8 @@ class AIReplySettingsUpdate(BaseModel):
     model_name: str | None = None
     api_key: str | None = None
     base_url: str | None = None
-    max_discount_percent: int | None = None
-    max_discount_amount: int | None = None
+    max_discount_percent: float | None = None
+    max_discount_amount: float | None = None
     max_bargain_rounds: int | None = None
     custom_prompts: str | None = None
     enabled: bool | None = None

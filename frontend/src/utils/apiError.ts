@@ -10,9 +10,20 @@ export function getApiErrorMessage(error: unknown, fallback: string): string {
     }
 
     if (responseData && typeof responseData === 'object') {
-      const message = responseData.message || responseData.msg || responseData.detail
+      const message = responseData.message || responseData.msg || (typeof responseData.detail === 'string' ? responseData.detail : undefined)
       if (typeof message === 'string' && message.trim()) {
         return message
+      }
+      if (Array.isArray(responseData.detail)) {
+        const detailMessages = responseData.detail
+          .map((item) => {
+            const field = Array.isArray(item.loc) ? item.loc.filter(part => part !== 'body').join('.') : ''
+            return [field, item.msg].filter(Boolean).join(': ')
+          })
+          .filter(Boolean)
+        if (detailMessages.length > 0) {
+          return detailMessages.join('；')
+        }
       }
     }
 

@@ -47,8 +47,8 @@ class AIReplySettingsService:
         payload = DEFAULT_AI_SETTINGS.copy()
         payload.update({k: v for k, v in stored.items() if v is not None})
         payload["ai_enabled"] = read_ai_enabled(stored)
-        payload["max_discount_percent"] = int(payload.get("max_discount_percent", 10) or 0)
-        payload["max_discount_amount"] = int(payload.get("max_discount_amount", 100) or 0)
+        payload["max_discount_percent"] = float(payload.get("max_discount_percent", 10) or 0)
+        payload["max_discount_amount"] = float(payload.get("max_discount_amount", 100) or 0)
         payload["max_bargain_rounds"] = int(payload.get("max_bargain_rounds", 3) or 0)
         payload["provider_type"] = normalize_ai_provider_type(
             payload.get("provider_type"),
@@ -89,9 +89,9 @@ class AIReplySettingsService:
         if "base_url" in payload:
             merged["base_url"] = clean_ai_text(payload.get("base_url"))
         if "max_discount_percent" in payload:
-            merged["max_discount_percent"] = int(payload.get("max_discount_percent", 10) or 0)
+            merged["max_discount_percent"] = float(payload.get("max_discount_percent", 10) or 0)
         if "max_discount_amount" in payload:
-            merged["max_discount_amount"] = int(payload.get("max_discount_amount", 100) or 0)
+            merged["max_discount_amount"] = float(payload.get("max_discount_amount", 100) or 0)
         if "max_bargain_rounds" in payload:
             merged["max_bargain_rounds"] = int(payload.get("max_bargain_rounds", 3) or 0)
         if "custom_prompts" in payload:

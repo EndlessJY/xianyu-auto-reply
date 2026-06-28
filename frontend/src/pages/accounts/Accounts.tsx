@@ -680,13 +680,11 @@ export function Accounts() {
         closeModal()
         loadAccounts()
       } else {
-        addToast({ type: 'error', message: result.message || result.detail || '添加失败' })
+        const detail = typeof result.detail === 'string' ? result.detail : ''
+        addToast({ type: 'error', message: result.message || detail || '添加失败' })
       }
     } catch (error: unknown) {
-      // 获取后端返回的错误信息
-      const axiosError = error as { response?: { data?: { detail?: string; message?: string } } }
-      const errorMessage = axiosError.response?.data?.detail || axiosError.response?.data?.message || '添加账号失败'
-      addToast({ type: 'error', message: errorMessage })
+      addToast({ type: 'error', message: getApiErrorMessage(error, '添加账号失败') })
     } finally {
       setManualLoading(false)
     }
@@ -1300,6 +1298,26 @@ export function Accounts() {
     model_name: aiModelName,
   })
 
+  const getValidatedAINumericSettings = () => {
+    if (!Number.isFinite(aiMaxDiscountPercent) || aiMaxDiscountPercent < 0 || aiMaxDiscountPercent > 100) {
+      addToast({ type: 'warning', message: '最大折扣需填写 0 到 100 之间的数字' })
+      return null
+    }
+    if (!Number.isFinite(aiMaxDiscountAmount) || aiMaxDiscountAmount < 0) {
+      addToast({ type: 'warning', message: '最大减价需填写大于等于 0 的数字' })
+      return null
+    }
+    if (!Number.isInteger(aiMaxBargainRounds) || aiMaxBargainRounds < 1 || aiMaxBargainRounds > 10) {
+      addToast({ type: 'warning', message: '最大议价轮数需填写 1 到 10 之间的整数' })
+      return null
+    }
+    return {
+      max_discount_percent: aiMaxDiscountPercent,
+      max_discount_amount: aiMaxDiscountAmount,
+      max_bargain_rounds: aiMaxBargainRounds,
+    }
+  }
+
   const handleToggleAIEnabledInModal = () => {
     if (aiEnabled) {
       setAiEnabled(false)
@@ -1366,6 +1384,8 @@ export function Accounts() {
         return
       }
     }
+    const numericSettings = getValidatedAINumericSettings()
+    if (!numericSettings) return
     try {
       setAiSettingsSaving(true)
       const result = await updateAIReplySettings(aiSettingsAccount.id, {
@@ -1374,9 +1394,7 @@ export function Accounts() {
         base_url: aiApiUrl,
         api_key: aiApiKey,
         model_name: aiModelName,
-        max_discount_percent: aiMaxDiscountPercent,
-        max_discount_amount: aiMaxDiscountAmount,
-        max_bargain_rounds: aiMaxBargainRounds,
+        ...numericSettings,
         custom_prompts: aiCustomPrompts,
         ai_time_range_start: aiTimeRangeStart,
         ai_time_range_end: aiTimeRangeEnd,
@@ -1408,6 +1426,8 @@ export function Accounts() {
       addToast({ type: 'warning', message: getAIConfigIncompleteMessage(missingItems) })
       return
     }
+    const numericSettings = getValidatedAINumericSettings()
+    if (!numericSettings) return
     // 先保存设置再测试
     try {
       setAiTesting(true)
@@ -1417,9 +1437,7 @@ export function Accounts() {
         base_url: aiApiUrl,
         api_key: aiApiKey,
         model_name: aiModelName,
-        max_discount_percent: aiMaxDiscountPercent,
-        max_discount_amount: aiMaxDiscountAmount,
-        max_bargain_rounds: aiMaxBargainRounds,
+        ...numericSettings,
         custom_prompts: aiCustomPrompts,
         ai_time_range_start: aiTimeRangeStart,
         ai_time_range_end: aiTimeRangeEnd,
@@ -3485,6 +3503,7 @@ export function Accounts() {
                           className="input-ios"
                           min="0"
                           max="100"
+                          step="0.1"
                         />
                       </div>
                       <div className="input-group">
@@ -3495,6 +3514,7 @@ export function Accounts() {
                           onChange={(e) => setAiMaxDiscountAmount(Number(e.target.value))}
                           className="input-ios"
                           min="0"
+                          step="0.01"
                         />
                       </div>
                       <div className="input-group">
@@ -3506,6 +3526,7 @@ export function Accounts() {
                           className="input-ios"
                           min="1"
                           max="10"
+                          step="1"
                         />
                       </div>
                     </div>

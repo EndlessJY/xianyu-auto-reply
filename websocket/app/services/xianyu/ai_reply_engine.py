@@ -431,8 +431,8 @@ class AIReplyEngine:
         payload["base_url"] = clean_ai_text(payload.get("base_url"))
         payload["model_name"] = clean_ai_text(payload.get("model_name"))
         payload["max_bargain_rounds"] = int(payload.get("max_bargain_rounds") or 3)
-        payload["max_discount_percent"] = int(payload.get("max_discount_percent") or 10)
-        payload["max_discount_amount"] = int(payload.get("max_discount_amount") or 100)
+        payload["max_discount_percent"] = float(payload.get("max_discount_percent") or 10)
+        payload["max_discount_amount"] = float(payload.get("max_discount_amount") or 100)
         payload["custom_prompts"] = payload.get("custom_prompts") or ""
         payload["ai_time_range_start"] = payload.get("ai_time_range_start") or ""
         payload["ai_time_range_end"] = payload.get("ai_time_range_end") or ""

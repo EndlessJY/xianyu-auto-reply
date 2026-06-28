@@ -292,7 +292,7 @@ export interface ApiResponse<T = unknown> {
   data?: T
   // 后端兼容字段
   msg?: string
-  detail?: string
+  detail?: string | Array<{ loc?: Array<string | number>; msg?: string; type?: string }>
 }
 
 // 仪表盘统计类型
