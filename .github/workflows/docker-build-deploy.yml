@@ -24,6 +24,15 @@ on:
         required: true
         default: auto
         type: string
+      rebuild_base:
+        description: Rebuild shared Python + Playwright base image
+        required: true
+        default: auto
+        type: choice
+        options:
+          - auto
+          - "true"
+          - "false"
 
 permissions:
   contents: read
@@ -64,6 +73,7 @@ jobs:
           BEFORE_SHA: ${{ github.event.before }}
           SERVICES_INPUT: ${{ inputs.services || 'auto' }}
           PLATFORMS_INPUT: ${{ inputs.platforms || 'linux/arm64' }}
+          REBUILD_BASE_INPUT: ${{ inputs.rebuild_base || 'auto' }}
         run: |
           python - <<'PY'
           import json
@@ -93,7 +103,11 @@ jobs:
 
           services_input = (os.environ.get("SERVICES_INPUT") or "auto").strip()
           platforms = (os.environ.get("PLATFORMS_INPUT") or "linux/arm64").strip()
+          rebuild_base_input = (os.environ.get("REBUILD_BASE_INPUT") or "auto").strip().lower()
           sha = os.environ["GITHUB_SHA"]
+
+          if rebuild_base_input not in {"auto", "true", "false"}:
+              raise SystemExit(f"Unknown rebuild_base input: {rebuild_base_input}")
 
           def run_git(args):
               return subprocess.check_output(["git", *args], text=True).strip()
@@ -124,7 +138,6 @@ jobs:
                       selected.add(service)
           elif requested == "all":
               selected.update(all_services)
-              base_changed = True
           else:
               files = changed_files()
               if files is None:
@@ -153,6 +166,11 @@ jobs:
                           selected.add("scheduler")
                       elif path.startswith("frontend/") or path.startswith("docker/frontend/"):
                           selected.add("frontend")
+
+          if rebuild_base_input == "true":
+              base_changed = True
+          elif rebuild_base_input == "false":
+              base_changed = False
 
           services = [service for service in all_services if service in selected]
           if base_changed and not any(service in services for service in python_services):
