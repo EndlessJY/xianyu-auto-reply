@@ -282,6 +282,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Prepare Docker config
+        run: |
+          mkdir -p "$RUNNER_TEMP/.docker"
+          echo "DOCKER_CONFIG=$RUNNER_TEMP/.docker" >> "$GITHUB_ENV"
+
       - name: Set up QEMU
         if: needs.detect.outputs.use_qemu == 'true'
         uses: docker/setup-qemu-action@v3
@@ -329,6 +334,11 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Prepare Docker config
+        run: |
+          mkdir -p "$RUNNER_TEMP/.docker"
+          echo "DOCKER_CONFIG=$RUNNER_TEMP/.docker" >> "$GITHUB_ENV"
 
       - name: Set up QEMU
         if: needs.detect.outputs.use_qemu == 'true'
