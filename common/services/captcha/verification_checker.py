@@ -278,13 +278,13 @@ class VerificationChecker:
     def _confirm_success_after_visual(self) -> bool:
         """视觉通过后再做一次"风控真通过"二次确认
 
-        - 最多等 8 秒，每 0.3 秒轮询一次
+        - 最多等 6 秒，每 0.3 秒轮询一次
         - 任一时刻满足 URL 不在 punish 且 x5sec 已新下发 即返回 True
         - 若超时后 URL 仍在 x5step=2/punish/pureCaptcha 则返回 False
-        - 若超时后 URL 离开了 punish 但 x5sec 未更新，也按 True 处理
-          （部分场景下 x5sec 通过 Service Worker 异步写入，可能稍迟）
+        - 若超时后 URL 离开了 punish 但 x5sec 仍未更新，也返回 False；
+          仅靠 URL 跳转会把未真正放行的滑块误判为成功。
         """
-        max_wait = 2.0
+        max_wait = 6.0
         interval = 0.3
         waited = 0.0
         last_url = ""
@@ -323,15 +323,17 @@ class VerificationChecker:
             )
             return False
 
-        # URL 已离开 punish，但 x5sec 没更新（可能 SW 异步写入），保守按通过
+        # URL 已离开 punish，但 x5sec 没更新。不能按通过处理，否则登录流程会在
+        # goofish.com/im 空页面上误判为“原因未知”的账号密码失败。
         if x5sec_seen_new:
             logger.info(f"【{self.pure_user_id}】✅ 真通过：x5sec 已新下发")
             return True
 
         logger.warning(
-            f"【{self.pure_user_id}】⚠️  URL 已离开 punish 但 x5sec 未变更（{last_url[:120]}），按通过处理"
+            f"【{self.pure_user_id}】❌ URL 已离开 punish 但 x5sec 未变更（{last_url[:120]}），"
+            "判定为风控未真正放行"
         )
-        return True
+        return False
 
     def _check_container_status(self, target_frame: Any) -> Tuple[bool, bool]:
         """检查容器状态

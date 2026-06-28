@@ -253,10 +253,15 @@ def _run_password_login_sync(
         # - 在 session 中标注 reason，便于前端区分提示
         # 注意：保持 status='failed' 以兼容前端现有状态机
         try:
-            from common.services.captcha.xianyu_slider_stealth import BaxiaPunishCaptchaException
+            from common.services.captcha.xianyu_slider_stealth import (
+                BaxiaPunishCaptchaException,
+                SliderVerificationIncompleteException,
+            )
             _is_baxia_punish = isinstance(e, BaxiaPunishCaptchaException)
+            _is_slider_incomplete = isinstance(e, SliderVerificationIncompleteException)
         except Exception:
             _is_baxia_punish = False
+            _is_slider_incomplete = False
         
         if _is_baxia_punish:
             logger.warning(
@@ -277,6 +282,11 @@ def _run_password_login_sync(
             )
             password_login_sessions[session_id]['reason'] = 'baxia_punish_captcha'
             password_login_sessions[session_id]['cooldown_hours'] = 5
+        elif _is_slider_incomplete:
+            logger.warning(f"【{account_id}】闲鱼普通滑块未真正放行：{error_msg}")
+            password_login_sessions[session_id]['status'] = 'failed'
+            password_login_sessions[session_id]['error'] = error_msg
+            password_login_sessions[session_id]['reason'] = 'slider_verification_incomplete'
         else:
             password_login_sessions[session_id]['status'] = 'failed'
             password_login_sessions[session_id]['error'] = error_msg

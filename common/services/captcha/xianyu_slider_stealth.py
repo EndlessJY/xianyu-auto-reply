@@ -60,6 +60,15 @@ class BaxiaPunishCaptchaException(Exception):
     pass
 
 
+class SliderVerificationIncompleteException(Exception):
+    """普通滑块视觉通过但未拿到放行 Cookie。
+
+    典型表现是页面跳到 goofish.com/im，但浏览器 cookie 只有 x5sectag 等标记，
+    没有 x5sec/unb/cookie2。此时不是账密错误，也不是人脸验证。
+    """
+    pass
+
+
 class XianyuSliderStealth(PlaywrightSliderService):
     """闲鱼滑块验证服务 - 扩展版
     
@@ -355,12 +364,14 @@ class XianyuSliderStealth(PlaywrightSliderService):
                         self._disable_account_on_timeout("人脸验证超时")
                         return None
                 else:
-                    logger.error(f"【{self.pure_user_id}】❌ 登录失败，原因未知")
-                    return None
+                    self._raise_slider_incomplete()
         
         except BaxiaPunishCaptchaException:
             # baxia-punish 风控图形滑块（账号本身正常）需要透传，
             # 由外层调用方仅设置冷却期、不禁用账号、发送特定通知。
+            raise
+        except SliderVerificationIncompleteException:
+            # 普通滑块未真正放行，透传给外层返回准确错误。
             raise
         except LoginPageErrorException:
             # 登录页错误（账密错误、账号冻结、风控等）需要让外层调用方拿到具体错误文案，
@@ -518,6 +529,42 @@ class XianyuSliderStealth(PlaywrightSliderService):
                 continue
         
         return None
+
+    def _build_slider_incomplete_message(self) -> str:
+        """构建普通滑块未真正放行的用户可读原因。"""
+        try:
+            current_url = self.page.url or ""
+        except Exception:
+            current_url = ""
+
+        cookie_names = []
+        try:
+            cookie_names = sorted({
+                cookie.get("name", "")
+                for cookie in (self.context.cookies() if self.context else [])
+                if cookie.get("name")
+            })
+        except Exception:
+            cookie_names = []
+
+        has_release_cookie = any(name in cookie_names for name in ("x5sec", "unb", "cookie2"))
+        has_slider_marker = any(name in cookie_names for name in ("x5sectag", "x5secdata"))
+
+        if has_release_cookie:
+            return "闲鱼滑块验证已放行，但登录态仍未加载完成，请稍后重试"
+        if has_slider_marker:
+            return (
+                "闲鱼滑块风控未真正放行：页面已跳转但未获得 x5sec/unb 登录凭据。"
+                "这不是人脸验证，也不一定是密码错误；请稍后重试，或改用扫码登录。"
+            )
+        if current_url:
+            return f"闲鱼登录未完成，当前页面停留在 {current_url[:120]}，请稍后重试或改用扫码登录"
+        return "闲鱼登录未完成，请稍后重试或改用扫码登录"
+
+    def _raise_slider_incomplete(self) -> None:
+        message = self._build_slider_incomplete_message()
+        logger.error(f"【{self.pure_user_id}】❌ {message}")
+        raise SliderVerificationIncompleteException(message)
     
     def _detect_and_handle_slider(self) -> bool:
         """检测并处理滑块验证
@@ -552,7 +599,7 @@ class XianyuSliderStealth(PlaywrightSliderService):
                 return True
             else:
                 logger.error(f"【{self.pure_user_id}】❌ 滑块验证失败")
-                return False
+                self._raise_slider_incomplete()
         
         return True
     
@@ -772,16 +819,23 @@ class XianyuSliderStealth(PlaywrightSliderService):
                                         slider_success = self.solve_slider(max_retries=3)
                                         if not slider_success:
                                             logger.error(f"【{self.pure_user_id}】❌ 刷新后滑块验证仍然失败")
+                                            self._raise_slider_incomplete()
                                         else:
                                             logger.success(f"【{self.pure_user_id}】✅ 刷新后滑块验证成功！")
                                             time.sleep(3)
                                     except Exception as e:
+                                        if isinstance(e, SliderVerificationIncompleteException):
+                                            raise
                                         logger.error(f"【{self.pure_user_id}】❌ 页面刷新失败: {e}")
                                 
                                 # 返回 False, None 表示不是二维码/人脸验证（已处理滑块）
                                 return False, None
+                        except SliderVerificationIncompleteException:
+                            raise
                         except Exception:
                             continue
+                except SliderVerificationIncompleteException:
+                    raise
                 except Exception:
                     continue
             
@@ -953,6 +1007,8 @@ class XianyuSliderStealth(PlaywrightSliderService):
             logger.info(f"【{self.pure_user_id}】未检测到二维码/人脸验证")
             return False, None
             
+        except SliderVerificationIncompleteException:
+            raise
         except Exception as e:
             logger.error(f"【{self.pure_user_id}】检测二维码/人脸验证时出错: {e}")
             return False, None
